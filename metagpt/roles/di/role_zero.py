@@ -104,6 +104,10 @@ class RoleZero(Role):
         # We force using this parameter for DataAnalyst
         assert self.react_mode == "react"
 
+        # Filter out SearchEnhancedQA from tools when search is not enabled
+        if not self.config.enable_search:
+            self.tools = [t for t in self.tools if t != "SearchEnhancedQA"]
+
         # Roughly the same part as DataInterpreter.set_plan_and_tool
         self._set_react_mode(react_mode=self.react_mode, max_react_loop=self.max_react_loop)
         if self.tools and not self.tool_recommender:
@@ -252,6 +256,13 @@ class RoleZero(Role):
         async with ThoughtReporter(enable_llm_stream=True) as reporter:
             await reporter.async_report({"type": "react"})
             self.command_rsp = await self.llm_cached_aask(req=req, system_msgs=[system_prompt], state_data=state_data)
+
+        if not self.command_rsp or not self.command_rsp.strip():
+            logger.warning("LLM returned empty command response, requesting retry...")
+            self.command_rsp = await self.llm_cached_aask(req=req, system_msgs=[system_prompt], state_data=state_data)
+            if not self.command_rsp or not self.command_rsp.strip():
+                logger.error("LLM returned empty response twice, skipping this round.")
+                self.command_rsp = '```json\n[{"command_name": "end", "args": {}}]\n```'
 
         rsp_hist = [mem.content for mem in self.rc.memory.get()]
         self.command_rsp = await check_duplicates(

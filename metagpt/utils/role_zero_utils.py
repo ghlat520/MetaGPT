@@ -81,16 +81,14 @@ async def check_duplicates(
                 # Detect the duplicate of the 'Plan.finish_current_task' command, and use the 'end' command to finish the task.
                 logger.warning(f"Duplicate response detected: {command_rsp}")
                 return END_COMMAND
-            problem = await llm.aask(
-                req + [UserMessage(content=SUMMARY_PROBLEM_WHEN_DUPLICATE.format(language=respond_language))]
-            )
+            summary_req = req + [{"role": "user", "content": SUMMARY_PROBLEM_WHEN_DUPLICATE.format(language=respond_language)}]
+            problem = await llm.aask(summary_req)
             ASK_HUMAN_COMMAND[0]["args"]["question"] = ASK_HUMAN_GUIDANCE_FORMAT.format(problem=problem).strip()
             ask_human_command = "```json\n" + json.dumps(ASK_HUMAN_COMMAND, indent=4, ensure_ascii=False) + "\n```"
             return ask_human_command
         # Try correction by self
         logger.warning(f"Duplicate response detected: {command_rsp}")
-        regenerate_req = req + [UserMessage(content=REGENERATE_PROMPT)]
-        regenerate_req = llm.format_msg(regenerate_req)
+        regenerate_req = req + [{"role": "user", "content": REGENERATE_PROMPT}]
         command_rsp = await llm.aask(regenerate_req)
     return command_rsp
 
@@ -106,6 +104,11 @@ async def parse_commands(command_rsp: str, llm, exclusive_tool_commands: list[st
         A tuple containing:
             - A boolean flag indicating success (True) or failure (False).
     """
+    if not command_rsp or not command_rsp.strip():
+        error_msg = "LLM returned an empty response. Please retry with a valid command."
+        logger.warning(error_msg)
+        return error_msg, False, command_rsp
+
     try:
         commands = CodeParser.parse_code(block=None, lang="json", text=command_rsp)
         if commands.endswith("]") and not commands.startswith("["):
@@ -132,6 +135,11 @@ async def parse_commands(command_rsp: str, llm, exclusive_tool_commands: list[st
     # 为了对LLM不按格式生成进行容错
     if isinstance(commands, dict):
         commands = commands["commands"] if "commands" in commands else [commands]
+
+    # Filter out malformed commands that lack 'command_name'
+    commands = [cmd for cmd in commands if isinstance(cmd, dict) and "command_name" in cmd]
+    if not commands:
+        return "All commands were malformed (missing 'command_name'). Please retry with valid commands.", False, command_rsp
 
     # Set the exclusive command flag to False.
     command_flag = [command["command_name"] not in exclusive_tool_commands for command in commands]
